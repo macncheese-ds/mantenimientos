@@ -49,10 +49,12 @@ CREATE TABLE IF NOT EXISTS machines (
   id INT PRIMARY KEY AUTO_INCREMENT,
   line_id INT NOT NULL,
   name VARCHAR(100) NOT NULL,
+  serial_number VARCHAR(100),
   display_order INT DEFAULT 0,
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (line_id) REFERENCES `lines`(id) ON DELETE CASCADE
+  FOREIGN KEY (line_id) REFERENCES `lines`(id) ON DELETE CASCADE,
+  INDEX idx_serial (serial_number)
 );
 
 -- ============================================================================
@@ -63,7 +65,7 @@ CREATE TABLE IF NOT EXISTS maintenance_tasks (
   machine_id INT NOT NULL,
   description VARCHAR(500) NOT NULL,
   frequency ENUM('weekly','monthly','semiannual','annual') NOT NULL,
-  requires_photo BOOLEAN DEFAULT FALSE,
+  requires_photo BOOLEAN DEFAULT TRUE,
   display_order INT DEFAULT 0,
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

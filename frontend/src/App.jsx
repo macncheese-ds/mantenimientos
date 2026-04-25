@@ -67,6 +67,7 @@ export default function App() {
             element={
               <Dashboard
                 user={user}
+                setUser={setUser}
                 onLoginRequired={() => setShowLogin(true)}
               />
             }

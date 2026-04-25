@@ -63,17 +63,17 @@ router.get('/all', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/tasks — create a new task
+// POST /api/tasks — create a single task (photos always required)
 router.post('/', authenticateToken, async (req, res) => {
-  const { machine_id, description, frequency, requires_photo, display_order } = req.body;
+  const { machine_id, description, frequency, display_order } = req.body;
   if (!machine_id || !description || !frequency) {
     return res.status(400).json({ message: 'machine_id, description y frequency requeridos' });
   }
 
   try {
     const [result] = await pool.execute(
-      'INSERT INTO maintenance_tasks (machine_id, description, frequency, requires_photo, display_order) VALUES (?, ?, ?, ?, ?)',
-      [machine_id, description, frequency, requires_photo || false, display_order || 0]
+      'INSERT INTO maintenance_tasks (machine_id, description, frequency, requires_photo, display_order) VALUES (?, ?, ?, TRUE, ?)',
+      [machine_id, description, frequency, display_order || 0]
     );
     res.json({ success: true, id: result.insertId });
   } catch (err) {
@@ -82,26 +82,28 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/tasks/bulk — create multiple tasks at once
+// POST /api/tasks/bulk — create multiple tasks at once for a single machine
 router.post('/bulk', authenticateToken, async (req, res) => {
-  const { tasks } = req.body;
-  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
-    return res.status(400).json({ message: 'Array de tareas requerido' });
+  const { machine_id, tasks } = req.body;
+  if (!machine_id || !tasks || !Array.isArray(tasks) || tasks.length === 0) {
+    return res.status(400).json({ message: 'machine_id y array de tareas requeridos' });
   }
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     const ids = [];
-    for (const task of tasks) {
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      if (!task.description || !task.description.trim() || !task.frequency) continue; // skip empty
       const [result] = await conn.execute(
-        'INSERT INTO maintenance_tasks (machine_id, description, frequency, requires_photo, display_order) VALUES (?, ?, ?, ?, ?)',
-        [task.machine_id, task.description, task.frequency, task.requires_photo || false, task.display_order || 0]
+        'INSERT INTO maintenance_tasks (machine_id, description, frequency, requires_photo, display_order) VALUES (?, ?, ?, TRUE, ?)',
+        [machine_id, task.description.trim(), task.frequency, task.display_order || i + 1]
       );
       ids.push(result.insertId);
     }
     await conn.commit();
-    res.json({ success: true, ids });
+    res.json({ success: true, ids, count: ids.length });
   } catch (err) {
     await conn.rollback();
     console.error('Error creating tasks:', err);
@@ -113,11 +115,11 @@ router.post('/bulk', authenticateToken, async (req, res) => {
 
 // PUT /api/tasks/:id — update a task
 router.put('/:id', authenticateToken, async (req, res) => {
-  const { machine_id, description, frequency, requires_photo, display_order, active } = req.body;
+  const { machine_id, description, frequency, display_order, active } = req.body;
   try {
     await pool.execute(
-      'UPDATE maintenance_tasks SET machine_id = COALESCE(?, machine_id), description = COALESCE(?, description), frequency = COALESCE(?, frequency), requires_photo = COALESCE(?, requires_photo), display_order = COALESCE(?, display_order), active = COALESCE(?, active) WHERE id = ?',
-      [machine_id, description, frequency, requires_photo, display_order, active, req.params.id]
+      'UPDATE maintenance_tasks SET machine_id = COALESCE(?, machine_id), description = COALESCE(?, description), frequency = COALESCE(?, frequency), display_order = COALESCE(?, display_order), active = COALESCE(?, active) WHERE id = ?',
+      [machine_id, description, frequency, display_order, active, req.params.id]
     );
     res.json({ success: true });
   } catch (err) {

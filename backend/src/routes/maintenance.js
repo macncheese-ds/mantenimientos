@@ -33,37 +33,21 @@ const upload = multer({
 });
 
 // ── Cycle calculation logic ──
-// Calendar-year week numbering: Week 1 starts on the first Monday of January
-// 52 weeks per year. Week 1 = Jan first Monday, Week 52 = includes last days of Dec
 function getWeekNumber(startDateStr) {
   const start = new Date(startDateStr);
   const now = new Date();
-
-  // If before start date, return week 1
-  if (now < start) {
-    return 1;
-  }
-
+  if (now < start) return 1;
   const diffMs = now.getTime() - start.getTime();
   const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
   const weekNumber = Math.floor(diffDays / 7) + 1;
-
-  // Cap at 52 weeks
   return Math.min(weekNumber, 52);
 }
 
 function getActiveFrequencies(weekNumber) {
   const frequencies = ['weekly'];
-
-  // Every 4th week → monthly
   if (weekNumber % 4 === 0) frequencies.push('monthly');
-
-  // Every 26th week → semiannual
   if (weekNumber % 26 === 0) frequencies.push('semiannual');
-
-  // Week 52 → annual
   if (weekNumber % 52 === 0) frequencies.push('annual');
-
   return frequencies;
 }
 
@@ -83,7 +67,7 @@ async function getCycleYear() {
 
 // ── Routes ──
 
-// GET /api/maintenance/current-cycle — get current week and active frequencies
+// GET /api/maintenance/current-cycle
 router.get('/current-cycle', async (req, res) => {
   try {
     const startDate = await getCycleStartDate();
@@ -91,7 +75,6 @@ router.get('/current-cycle', async (req, res) => {
     const weekNumber = getWeekNumber(startDate);
     const frequencies = getActiveFrequencies(weekNumber);
 
-    // Calculate week date range
     const start = new Date(startDate);
     const weekStart = new Date(start.getTime() + (weekNumber - 1) * 7 * 24 * 60 * 60 * 1000);
     const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
@@ -113,7 +96,7 @@ router.get('/current-cycle', async (req, res) => {
   }
 });
 
-// GET /api/maintenance/checklist/:lineId — get machines + applicable tasks for current cycle
+// GET /api/maintenance/checklist/:lineId
 router.get('/checklist/:lineId', async (req, res) => {
   try {
     const startDate = await getCycleStartDate();
@@ -121,27 +104,23 @@ router.get('/checklist/:lineId', async (req, res) => {
     const weekNumber = getWeekNumber(startDate);
     const frequencies = getActiveFrequencies(weekNumber);
 
-    // Get machines for this line
     const [machines] = await pool.execute(
       'SELECT * FROM machines WHERE line_id = ? AND active = TRUE ORDER BY display_order, id',
       [req.params.lineId]
     );
 
-    // Get tasks for these machines filtered by active frequencies
-    const placeholders = frequencies.map(() => '?').join(',');
     const machineIds = machines.map(m => m.id);
-
     if (machineIds.length === 0) {
       return res.json({ success: true, data: { weekNumber, year, frequencies, machines: [] } });
     }
 
+    const placeholders = frequencies.map(() => '?').join(',');
     const machinePlaceholders = machineIds.map(() => '?').join(',');
     const [tasks] = await pool.execute(
       `SELECT * FROM maintenance_tasks WHERE machine_id IN (${machinePlaceholders}) AND frequency IN (${placeholders}) AND active = TRUE ORDER BY machine_id, display_order, id`,
       [...machineIds, ...frequencies]
     );
 
-    // Check if there's an existing record for this line/week/year
     const [existingRecords] = await pool.execute(
       'SELECT * FROM maintenance_records WHERE line_id = ? AND week_number = ? AND year = ? ORDER BY started_at DESC LIMIT 1',
       [req.params.lineId, weekNumber, year]
@@ -168,7 +147,6 @@ router.get('/checklist/:lineId', async (req, res) => {
       }
     }
 
-    // Group tasks by machine
     const machinesWithTasks = machines.map(machine => ({
       ...machine,
       tasks: tasks
@@ -210,7 +188,6 @@ router.post('/records', authenticateToken, async (req, res) => {
     const year = await getCycleYear();
     const weekNumber = getWeekNumber(startDate);
 
-    // Check if record already exists
     const [existing] = await pool.execute(
       'SELECT * FROM maintenance_records WHERE line_id = ? AND week_number = ? AND year = ?',
       [line_id, weekNumber, year]
@@ -220,7 +197,6 @@ router.post('/records', authenticateToken, async (req, res) => {
       return res.json({ success: true, data: existing[0], existed: true });
     }
 
-    // Create new record
     const [result] = await pool.execute(
       'INSERT INTO maintenance_records (line_id, week_number, year, operator_num_empleado, operator_name) VALUES (?, ?, ?, ?, ?)',
       [line_id, weekNumber, year, req.user.num_empleado, req.user.nombre]
@@ -244,60 +220,121 @@ router.post('/records/:recordId/tasks/:taskId/complete', authenticateToken, asyn
   const { completed, notes } = req.body;
 
   try {
-    // Check if completion exists
     const [existing] = await pool.execute(
       'SELECT * FROM task_completions WHERE record_id = ? AND task_id = ?',
       [recordId, taskId]
     );
 
     if (existing.length > 0) {
-      // Update existing
       await pool.execute(
         'UPDATE task_completions SET completed = ?, completed_at = ?, completed_by = ?, notes = COALESCE(?, notes) WHERE id = ?',
-        [completed, completed ? new Date() : null, completed ? req.user.num_empleado : null, notes, existing[0].id]
+        [completed, completed ? new Date() : null, req.user.num_empleado, notes, existing[0].id]
       );
       res.json({ success: true, id: existing[0].id });
     } else {
-      // Create new
       const [result] = await pool.execute(
         'INSERT INTO task_completions (record_id, task_id, completed, completed_at, completed_by, notes) VALUES (?, ?, ?, ?, ?, ?)',
-        [recordId, taskId, completed, completed ? new Date() : null, completed ? req.user.num_empleado : null, notes || null]
+        [recordId, taskId, completed, completed ? new Date() : null, req.user.num_empleado, notes || null]
       );
       res.json({ success: true, id: result.insertId });
     }
+  } catch (err) {
+    console.error('Error completing task:', err);
+    res.status(500).json({ message: 'Error completando tarea' });
+  }
+});
 
-    // Check if all tasks are completed → auto-complete the record
-    const startDate = await getCycleStartDate();
-    const weekNumber = getWeekNumber(startDate);
-    const frequencies = getActiveFrequencies(weekNumber);
+// POST /api/maintenance/records/:recordId/save — batch save all task completions + finalize
+// This is called when user clicks "Guardar Mantenimiento" with credentials
+router.post('/records/:recordId/save', authenticateToken, async (req, res) => {
+  const { recordId } = req.params;
+  const { completions } = req.body;
+  // completions = [{ task_id, completed, notes }]
 
-    const [record] = await pool.execute('SELECT * FROM maintenance_records WHERE id = ?', [recordId]);
+  if (!completions || !Array.isArray(completions)) {
+    return res.status(400).json({ message: 'Array de completions requerido' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Validate: incomplete tasks MUST have notes
+    for (const comp of completions) {
+      if (!comp.completed && (!comp.notes || !comp.notes.trim())) {
+        await conn.rollback();
+        return res.status(400).json({
+          message: `La tarea ${comp.task_id} no está completada y requiere un comentario explicando por qué.`,
+          task_id: comp.task_id,
+        });
+      }
+    }
+
+    // Upsert each completion
+    for (const comp of completions) {
+      const [existing] = await conn.execute(
+        'SELECT id FROM task_completions WHERE record_id = ? AND task_id = ?',
+        [recordId, comp.task_id]
+      );
+
+      if (existing.length > 0) {
+        await conn.execute(
+          'UPDATE task_completions SET completed = ?, completed_at = ?, completed_by = ?, notes = ? WHERE id = ?',
+          [comp.completed, comp.completed ? new Date() : null, req.user.num_empleado, comp.notes || null, existing[0].id]
+        );
+      } else {
+        await conn.execute(
+          'INSERT INTO task_completions (record_id, task_id, completed, completed_at, completed_by, notes) VALUES (?, ?, ?, ?, ?, ?)',
+          [recordId, comp.task_id, comp.completed, comp.completed ? new Date() : null, req.user.num_empleado, comp.notes || null]
+        );
+      }
+    }
+
+    // Check if all tasks are completed → update record status
+    const [record] = await conn.execute('SELECT * FROM maintenance_records WHERE id = ?', [recordId]);
     if (record.length > 0) {
+      const startDate = await getCycleStartDate();
+      const weekNumber = getWeekNumber(startDate);
+      const frequencies = getActiveFrequencies(weekNumber);
       const freqPlaceholders = frequencies.map(() => '?').join(',');
-      const [totalTasks] = await pool.execute(
+
+      const [totalTasks] = await conn.execute(
         `SELECT COUNT(*) as total FROM maintenance_tasks t JOIN machines m ON t.machine_id = m.id WHERE m.line_id = ? AND t.frequency IN (${freqPlaceholders}) AND t.active = TRUE`,
         [record[0].line_id, ...frequencies]
       );
-      const [completedTasks] = await pool.execute(
+      const [completedTasks] = await conn.execute(
         'SELECT COUNT(*) as total FROM task_completions WHERE record_id = ? AND completed = TRUE',
         [recordId]
       );
 
-      if (completedTasks[0].total >= totalTasks[0].total && totalTasks[0].total > 0) {
-        await pool.execute(
+      // Count all task_completions (completed + not completed but with notes)
+      const [allSubmitted] = await conn.execute(
+        'SELECT COUNT(*) as total FROM task_completions WHERE record_id = ?',
+        [recordId]
+      );
+
+      // All tasks submitted (even if some not completed) → mark as completed
+      if (allSubmitted[0].total >= totalTasks[0].total && totalTasks[0].total > 0) {
+        await conn.execute(
           'UPDATE maintenance_records SET status = "completed", completed_at = NOW() WHERE id = ?',
           [recordId]
         );
       } else {
-        await pool.execute(
+        await conn.execute(
           'UPDATE maintenance_records SET status = "in_progress", completed_at = NULL WHERE id = ?',
           [recordId]
         );
       }
     }
+
+    await conn.commit();
+    res.json({ success: true, message: 'Mantenimiento guardado correctamente' });
   } catch (err) {
-    console.error('Error completing task:', err);
-    res.status(500).json({ message: 'Error completando tarea' });
+    await conn.rollback();
+    console.error('Error saving maintenance:', err);
+    res.status(500).json({ message: 'Error guardando mantenimiento' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -314,7 +351,6 @@ router.post('/records/:recordId/tasks/:taskId/photo/:photoType', authenticateTok
   }
 
   try {
-    // Ensure task_completion exists
     let [existing] = await pool.execute(
       'SELECT * FROM task_completions WHERE record_id = ? AND task_id = ?',
       [recordId, taskId]
@@ -342,7 +378,6 @@ router.post('/records/:recordId/tasks/:taskId/photo/:photoType', authenticateTok
       await pool.execute('DELETE FROM task_photos WHERE id = ?', [photo.id]);
     }
 
-    // Save new photo
     const filePath = `/uploads/maintenance/${req.file.filename}`;
     const [result] = await pool.execute(
       'INSERT INTO task_photos (completion_id, photo_type, file_path, original_name, uploaded_by) VALUES (?, ?, ?, ?, ?)',
@@ -421,7 +456,6 @@ router.get('/records/:id', async (req, res) => {
 
     const record = records[0];
 
-    // Get completions with task info
     const [completions] = await pool.execute(
       `SELECT tc.*, mt.description as task_description, mt.frequency, mt.requires_photo, m.name as machine_name, m.id as machine_id
        FROM task_completions tc
@@ -432,7 +466,6 @@ router.get('/records/:id', async (req, res) => {
       [req.params.id]
     );
 
-    // Get photos
     const compIds = completions.map(c => c.id);
     let photos = [];
     if (compIds.length > 0) {
@@ -444,7 +477,6 @@ router.get('/records/:id', async (req, res) => {
       photos = photoRows;
     }
 
-    // Attach photos to completions
     const completionsWithPhotos = completions.map(c => ({
       ...c,
       photos: photos.filter(p => p.completion_id === c.id),
