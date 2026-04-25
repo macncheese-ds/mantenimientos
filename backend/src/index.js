@@ -20,10 +20,16 @@ const app = express();
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires'],
+  credentials: false,
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
 }));
 
-app.use(bodyParser.json());
+// Explicit OPTIONS handler for preflight
+app.options('*', cors());
+
+app.use(bodyParser.json({ limit: '10mb' }));
 
 // Security headers
 app.use(helmet({

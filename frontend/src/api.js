@@ -1,19 +1,19 @@
 import axios from 'axios';
 
+// In production behind Nginx proxy, use relative path (same origin)
+// In development, use the env variable pointing to backend directly
 const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3114';
 const api = axios.create({ baseURL: baseURL + '/api' });
 
 export const API_BASE_URL = baseURL;
 
-// Add auth token to requests + cache-busting for GET
+// Add auth token to requests
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
 
+  // Add cache-busting param for GET requests (avoids CORS preflight issues)
   if (config.method === 'get') {
-    config.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-    config.headers['Pragma'] = 'no-cache';
-    config.headers['Expires'] = '0';
     config.params = config.params || {};
     config.params._t = new Date().getTime();
   }
