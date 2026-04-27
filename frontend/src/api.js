@@ -21,6 +21,24 @@ api.interceptors.request.use(config => {
   return config;
 });
 
+// Handle expired / invalid tokens — clear session and show login modal
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      const hadToken = !!localStorage.getItem('token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      // Only fire event if we actually had a stale token (avoids loop on login page)
+      if (hadToken) {
+        window.dispatchEvent(new Event('auth:expired'));
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // ── Auth ──
 export const login = async (employee_input, password) => {
   const { data } = await api.post('/auth/login', { employee_input, password });

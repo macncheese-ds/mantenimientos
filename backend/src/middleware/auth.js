@@ -8,7 +8,12 @@ function authenticateToken(req, res, next) {
   if (!token) return res.status(401).json({ message: 'Token requerido' });
 
   jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
-    if (err) return res.status(403).json({ message: 'Token inválido' });
+    if (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ message: 'Sesión expirada, inicie sesión nuevamente' });
+      }
+      return res.status(403).json({ message: 'Token inválido' });
+    }
     req.user = user;
     next();
   });

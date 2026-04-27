@@ -26,6 +26,16 @@ export default function App() {
     }
   }, [])
 
+  // Listen for token expiry/invalidation from the API interceptor
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setUser(null)
+      setShowLogin(true)
+    }
+    window.addEventListener('auth:expired', handleAuthExpired)
+    return () => window.removeEventListener('auth:expired', handleAuthExpired)
+  }, [])
+
   const handleLogin = async ({ employee_input, password }) => {
     setLoginBusy(true)
     try {
